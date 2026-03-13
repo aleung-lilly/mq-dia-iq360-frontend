@@ -1,0 +1,62 @@
+name: ECR-Scan
+
+# Controls when the workflow will run
+on:
+  # Triggers the workflow on push or pull request events but only for the "main" branch
+  # push:
+  #   branches: [ "main" ]
+  # pull_request:
+  #   branches: [ "main" ]
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+env:
+  repositorys: ${{ vars.ECR_REPOSITORIES}}
+# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+jobs:
+  # This workflow contains a single job called "build"
+  build:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # This is required for requesting the JWT
+      contents: read   # This is required for actions/checkout
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - uses: actions/checkout@v3
+
+      - name: Configure AWS credentials from Pilot account
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: cn-northwest-1
+          # Here input GitHub Action Role you created in AWS for your application
+          role-to-assume: arn:aws-cn:iam::968245374389:role/lly-nw-com-Github-Scan-lambda-q-iamr-01
+      
+      - name: Create Artifacts Directory
+        run: mkdir -p artifacts
+          
+      - name: Parse ECR Repository values
+        id: parse_ecr_values
+        run: | 
+          #将环境变量中的内容按照逗号拆分成列表
+          repo_list=()
+          input_string=${{ env.repositorys }}
+          IFS=',' read -r -a repo_list <<< "$input_string"
+          #循环列表触发函数，返回结果放入artifacts中
+          for repo in "${repo_list[@]}"; do
+            aws lambda invoke --function-name Dependabot_Scan --cli-binary-format raw-in-base64-out --payload '{"ApplicationName":"XXXXXXXXXXXXX","RepositoryName":"'"$repo"'"}' artifacts/response.json
+            
+            #处理换行符和\"问题
+            sed -i 's/\\n/\n/g' artifacts/response.json
+            sed -i 's/\\"/"/g' artifacts/response.json
+            mv artifacts/response.json "artifacts/${repo}.json"
+          done
+      - name: Create ZIP Archive
+        run: zip -r artifacts.zip artifacts
+      
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v2
+        with:
+          name: my-artifacts
+          path: artifacts.zip
